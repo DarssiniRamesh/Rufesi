@@ -20,6 +20,7 @@
 #include "vehicle_speed.h"
 
 #include "headless/can/rusefi_can_core.h"
+#include "controllers/sensors/sensors_snapshot.h"
 
 EXTERN_ENGINE
 ;
@@ -91,6 +92,15 @@ void sendCanMessage() {
 }
 
 static void canDashboardBMW(void) {
+	/**
+	 * Canonical sensor read flow:
+	 *  - Prefer a consistent headless decoded snapshot (portable, testable)
+	 *  - If snapshot read fails, fall back to legacy globals to preserve behavior
+	 */
+	firmware_sensors_snapshot_t snap;
+	const int snapOk = readFirmwareSensorsSnapshot(&snap PASS_ENGINE_PARAMETER_SUFFIX);
+	const float clt = (snapOk == 0) ? snap.snapshot.clt_c : engine->sensors.clt;
+
 	// BMW Dashboard
 	commonTxInit(CAN_BMW_E46_SPEED);
 	setShortValue(&txmsg, 10 * 8, 1);
@@ -101,11 +111,21 @@ static void canDashboardBMW(void) {
 	sendCanMessage();
 
 	commonTxInit(CAN_BMW_E46_DME2);
-	setShortValue(&txmsg, (int)((engine->sensors.clt + 48.373) / 0.75), 1);
+	setShortValue(&txmsg, (int)((clt + 48.373) / 0.75), 1);
 	sendCanMessage();
 }
 
 static void canMazdaRX8(void) {
+	/**
+	 * Canonical sensor read flow:
+	 *  - Prefer snapshot values (decoded via headless math)
+	 *  - Fall back to legacy globals on error (behavior preservation)
+	 */
+	firmware_sensors_snapshot_t snap;
+	const int snapOk = readFirmwareSensorsSnapshot(&snap PASS_ENGINE_PARAMETER_SUFFIX);
+	const float clt = (snapOk == 0) ? snap.snapshot.clt_c : engine->sensors.clt;
+	const float vbatt = (snapOk == 0) ? snap.snapshot.vbatt : engine->sensors.vBatt;
+
 	commonTxInit(CAN_MAZDA_RX_STEERING_WARNING);
 	// todo: something needs to be set here? see http://rusefi.com/wiki/index.php?title=Vehicle:Mazda_Rx8_2004
 	sendCanMessage();
@@ -132,17 +152,17 @@ static void canMazdaRX8(void) {
 	sendCanMessage();
 
 	commonTxInit(CAN_MAZDA_RX_STATUS_2);
-	txmsg.data8[0] = (uint8_t)(engine->sensors.clt + 69); // temp gauge
+	txmsg.data8[0] = (uint8_t)(clt + 69); // temp gauge
 	txmsg.data8[1] = ((int16_t)(engine->engineState.vssEventCounter * (engineConfiguration->vehicleSpeedCoef * 0.277 * 2.58))) & 0xff;
 	txmsg.data8[2] = 0x00; // unknown
 	txmsg.data8[3] = 0x00; // unknown
 	txmsg.data8[4] = 0x01; // Oil Pressure (not really a gauge)
 	txmsg.data8[5] = 0x00; // check engine light
 	txmsg.data8[6] = 0x00; // Coolant, oil and battery
-	if ((GET_RPM() > 0) && (engine->sensors.vBatt < 13)) {
+	if ((GET_RPM() > 0) && (vbatt < 13)) {
 		setTxBit(6, 6); // battery light
 	}
-	if (engine->sensors.clt > 105) {
+	if (clt > 105) {
 		setTxBit(6, 1); // coolant light
 	}
 	// oil pressure warning lamp bit is 7
@@ -151,21 +171,29 @@ static void canMazdaRX8(void) {
 }
 
 static void canDashboardFiat(void) {
+	firmware_sensors_snapshot_t snap;
+	const int snapOk = readFirmwareSensorsSnapshot(&snap PASS_ENGINE_PARAMETER_SUFFIX);
+	const float clt = (snapOk == 0) ? snap.snapshot.clt_c : engine->sensors.clt;
+
 	// Fiat Dashboard
 	commonTxInit(CAN_FIAT_MOTOR_INFO);
-	setShortValue(&txmsg, (int)(engine->sensors.clt - 40), 3); // Coolant Temp
+	setShortValue(&txmsg, (int)(clt - 40), 3); // Coolant Temp
 	setShortValue(&txmsg, GET_RPM() / 32, 6); // RPM
 	sendCanMessage();
 }
 
 static void canDashboardVAG(void) {
+	firmware_sensors_snapshot_t snap;
+	const int snapOk = readFirmwareSensorsSnapshot(&snap PASS_ENGINE_PARAMETER_SUFFIX);
+	const float clt = (snapOk == 0) ? snap.snapshot.clt_c : engine->sensors.clt;
+
 	// VAG Dashboard
 	commonTxInit(CAN_VAG_RPM);
 	setShortValue(&txmsg, GET_RPM() * 4, 2); // RPM
 	sendCanMessage();
 
 	commonTxInit(CAN_VAG_CLT);
-	setShortValue(&txmsg, (int)((engine->sensors.clt + 48.373) / 0.75), 1); // Coolant Temp
+	setShortValue(&txmsg, (int)((clt + 48.373) / 0.75), 1); // Coolant Temp
 	sendCanMessage();
 }
 
