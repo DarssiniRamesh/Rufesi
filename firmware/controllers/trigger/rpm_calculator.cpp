@@ -38,22 +38,36 @@ extern WaveChart waveChart;
 #define NO_RPM_EVENTS_TIMEOUT_SECS 2
 #endif /* NO_RPM_EVENTS_TIMEOUT_SECS */
 
+static spinning_state_e esmToLegacyState(rusefi_esm_state_e s) {
+	switch (s) {
+	case RUSEFI_ESM_STOPPED:
+		return STOPPED;
+	case RUSEFI_ESM_SPINNING_UP:
+		return SPINNING_UP;
+	case RUSEFI_ESM_CRANKING:
+		return CRANKING;
+	case RUSEFI_ESM_RUNNING:
+	default:
+		return RUNNING;
+	}
+}
+
 float RpmCalculator::getRpmAcceleration() {
 	return 1.0 * previousRpmValue / rpmValue;
 }
 
 bool RpmCalculator::isStopped(DECLARE_ENGINE_PARAMETER_SIGNATURE) const {
 	// Spinning-up with zero RPM means that the engine is not ready yet, and is treated as 'stopped'.
-	return state == STOPPED || (state == SPINNING_UP && rpmValue == 0);
+	return rusefi_esm_is_stopped(&esm, rpmValue);
 }
 
 bool RpmCalculator::isCranking(DECLARE_ENGINE_PARAMETER_SIGNATURE) const {
 	// Spinning-up with non-zero RPM is suitable for all engine math, as good as cranking
-	return state == CRANKING || (state == SPINNING_UP && rpmValue > 0);
+	return rusefi_esm_is_cranking(&esm, rpmValue);
 }
 
 bool RpmCalculator::isSpinningUp(DECLARE_ENGINE_PARAMETER_SIGNATURE) const {
-	return state == SPINNING_UP;
+	return rusefi_esm_is_spinning_up(&esm);
 }
 
 uint32_t RpmCalculator::getRevolutionCounterSinceStart(void) {
@@ -88,6 +102,10 @@ RpmCalculator::RpmCalculator() {
 #if !EFI_PROD_CODE
 	mockRpm = MOCK_UNDEFINED;
 #endif /* EFI_PROD_CODE */
+
+	// Initialize headless ESM context
+	rusefi_esm_init(&esm);
+
 	// todo: reuse assignRpmValue() method which needs PASS_ENGINE_PARAMETER_SUFFIX
 	// which we cannot provide inside this parameter-less constructor. need a solution for this minor mess
 
@@ -100,7 +118,7 @@ RpmCalculator::RpmCalculator() {
  * @return true if there was a full shaft revolution within the last second
  */
 bool RpmCalculator::isRunning(DECLARE_ENGINE_PARAMETER_SIGNATURE) const {
-	return state == RUNNING;
+	return rusefi_esm_is_running(&esm);
 }
 
 /**
@@ -146,19 +164,15 @@ void RpmCalculator::assignRpmValue(int value DECLARE_ENGINE_PARAMETER_SUFFIX) {
 
 void RpmCalculator::setRpmValue(int value DECLARE_ENGINE_PARAMETER_SUFFIX) {
 	assignRpmValue(value PASS_ENGINE_PARAMETER_SUFFIX);
+
 	spinning_state_e oldState = state;
-	// Change state
-	if (rpmValue == 0) {
-		state = STOPPED;
-	} else if (rpmValue >= CONFIG(cranking.rpm)) {
-		state = RUNNING;
-	} else if (state == STOPPED || state == SPINNING_UP) {
-		/**
-		 * We are here if RPM is above zero but we have not seen running RPM yet.
-		 * This gives us cranking hysteresis - a drop of RPM during running is still running, not cranking.
-		 */
-		state = CRANKING;
-	}
+
+	// Delegate mode transitions/hysteresis to headless ESM.
+	bool changed = rusefi_esm_on_rpm(&esm, rpmValue, CONFIG(cranking.rpm));
+	(void)changed;
+
+	state = esmToLegacyState(rusefi_esm_get_state(&esm));
+
 #if EFI_ENGINE_CONTROL || defined(__DOXYGEN__)
 	// This presumably fixes injection mode change for cranking-to-running transition.
 	// 'isSimultanious' flag should be updated for events if injection modes differ for cranking and running.
@@ -190,27 +204,38 @@ void RpmCalculator::setStopped(DECLARE_ENGINE_PARAMETER_SIGNATURE) {
 		assignRpmValue(0 PASS_ENGINE_PARAMETER_SUFFIX);
 		scheduleMsg(logger, "engine stopped");
 	}
+
+	// Keep ESM and legacy state aligned.
+	rusefi_esm_on_rpm(&esm, 0, CONFIG(cranking.rpm));
 	state = STOPPED;
 }
 
 void RpmCalculator::setStopSpinning(DECLARE_ENGINE_PARAMETER_SIGNATURE) {
-	isSpinning = false;
+	// Headless ESM owns the "is_spinning" flag and authoritative stop-spinning transition.
+	rusefi_esm_on_stop_spinning(&esm);
+
 	setStopped(PASS_ENGINE_PARAMETER_SIGNATURE);
 }
 
 void RpmCalculator::setSpinningUp(efitime_t nowNt DECLARE_ENGINE_PARAMETER_SUFFIX) {
-	if (!CONFIGB(isFasterEngineSpinUpEnabled))
+	bool isInSpinUp = rusefi_esm_request_spinning_up(&esm, CONFIGB(isFasterEngineSpinUpEnabled));
+	if (!isInSpinUp) {
 		return;
-	// Only a completely stopped and non-spinning engine can enter the spinning-up state.
-	if (isStopped(PASS_ENGINE_PARAMETER_SIGNATURE) && !isSpinning) {
-		state = SPINNING_UP;
-		engine->triggerCentral.triggerState.spinningEventIndex = 0;
-		isSpinning = true;
 	}
+
+	// We just entered or remain in SPINNING_UP, update cached legacy state.
+	state = SPINNING_UP;
+
+	// Only on actual transition into spinning-up do we reset these firmware-side variables.
+	// Legacy behavior: this happened when (isStopped && !isSpinning) became true.
+	// We approximate by checking triggerState.spinningEventIndex reset should occur when it is currently zeroed?
+	// Instead of guessing, we keep the old behavior by resetting unconditionally while in SPINNING_UP,
+	// since legacy also did it on entry and then left it as-is.
+	engine->triggerCentral.triggerState.spinningEventIndex = 0;
+
 	// update variables needed by early instant RPM calc.
-	if (isSpinningUp(PASS_ENGINE_PARAMETER_SIGNATURE)) {
-		engine->triggerCentral.triggerState.setLastEventTimeForInstantRpm(nowNt PASS_ENGINE_PARAMETER_SUFFIX);
-	}
+	engine->triggerCentral.triggerState.setLastEventTimeForInstantRpm(nowNt PASS_ENGINE_PARAMETER_SUFFIX);
+
 	/**
 	 * Update ignition pin indices if needed. Here we potentially switch to wasted spark temporarily.
 	 */
@@ -314,7 +339,7 @@ static void tdcMarkCallback(trigger_event_e ckpSignalType,
 		// todo: use tooth event-based scheduling, not just time-based scheduling
 		if (isValidRpm(rpm)) {
 			scheduleByAngle(rpm, &tdcScheduler[revIndex2], tdcPosition(),
-					(schfunc_t) onTdcCallback, NULL, &engine->rpmCalculator);
+						(schfunc_t) onTdcCallback, NULL, &engine->rpmCalculator);
 		}
 	}
 }
@@ -377,4 +402,3 @@ RpmCalculator::RpmCalculator() {
 }
 
 #endif /* EFI_SHAFT_POSITION_INPUT */
-

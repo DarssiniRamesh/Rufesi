@@ -12,6 +12,8 @@
 #include <global.h>
 #include "scheduler.h"
 
+#include "rusefi_headless_esm.h"
+
 #define TOP_DEAD_CENTER_MESSAGE "r"
 
 #define WC_DOWN "d"
@@ -145,13 +147,16 @@ private:
 	 */
 	volatile uint32_t revolutionCounterSinceStart = 0;
 
+	/**
+	 * Local cached view for legacy callers/tests.
+	 * Authoritative transition logic lives in headless ESM and writes this value.
+	 */
 	spinning_state_e state = STOPPED;
 
 	/**
-	 * True if the engine is spinning (regardless of its state), i.e. if shaft position changes.
-	 * Needed by spinning-up logic.
+	 * Headless Engine State Machine context (authoritative state).
 	 */
-	bool isSpinning = false;
+	rusefi_esm_ctx_t esm;
 };
 
 // Just a getter for rpmValue which also handles mockRpm if not EFI_PROD_CODE
