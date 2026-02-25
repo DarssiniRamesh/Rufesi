@@ -59,6 +59,8 @@
 #include "can_hw.h"
 #include "cdm_ion_sense.h"
 
+#include "rusefi_headless_engine_mode.h"
+
 extern afr_Map3D_t afrMap;
 extern bool main_loop_started;
 
@@ -167,15 +169,7 @@ EXTERN_ENGINE
 
 static char buf[6];
 
-/**
- * This is useful if we are changing engine mode dynamically
- * For example http://rusefi.com/forum/viewtopic.php?f=5&t=1085
- */
-static int packEngineMode(DECLARE_ENGINE_PARAMETER_SIGNATURE) {
-	return (engineConfiguration->fuelAlgorithm << 4) +
-			(engineConfiguration->injectionMode << 2) +
-			engineConfiguration->ignitionMode;
-}
+
 
 static void printSensors(Logging *log, bool fileFormat) {
 	// current time, in milliseconds
@@ -232,7 +226,17 @@ static void printSensors(Logging *log, bool fileFormat) {
 	reportSensorF(log, fileFormat, GAUGE_NAME_CPU_TEMP, "C", getMCUInternalTemperature(), 2); // log column #3
 #endif
 
-	reportSensorI(log, fileFormat, "mode", "v", packEngineMode(PASS_ENGINE_PARAMETER_SIGNATURE)); // log column #3
+	reportSensorI(
+		log,
+		fileFormat,
+		"mode",
+		"v",
+		rusefi_headless_pack_engine_mode(
+			engineConfiguration->fuelAlgorithm,
+			engineConfiguration->injectionMode,
+			engineConfiguration->ignitionMode
+		)
+	); // log column #3
 
 	reportSensorF(log, fileFormat, GAUGE_NAME_ACCEL_X, "G", engine->sensors.accelerometer.x, 3);
 	reportSensorF(log, fileFormat, GAUGE_NAME_ACCEL_Y, "G", engine->sensors.accelerometer.y, 3);
@@ -871,7 +875,11 @@ void updateTunerStudioState(TunerStudioOutputChannels *tsOutputChannels DECLARE_
 
 	tsOutputChannels->vvtPosition = engine->triggerCentral.vvtPosition;
 
-	tsOutputChannels->engineMode = packEngineMode(PASS_ENGINE_PARAMETER_SIGNATURE);
+	tsOutputChannels->engineMode = rusefi_headless_pack_engine_mode(
+		engineConfiguration->fuelAlgorithm,
+		engineConfiguration->injectionMode,
+		engineConfiguration->ignitionMode
+	);
 
 #if	HAL_USE_ADC
 	tsOutputChannels->internalMcuTemperature = getMCUInternalTemperature();

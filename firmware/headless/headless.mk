@@ -5,7 +5,8 @@
 HEADLESS_SRC = \
 	$(PROJECT_DIR)/headless/sensors/rusefi_headless_sensors.c \
 	$(PROJECT_DIR)/headless/sensors/rusefi_headless_sensors_snapshot.c \
-	$(PROJECT_DIR)/headless/esm/rusefi_headless_esm.c
+	$(PROJECT_DIR)/headless/esm/rusefi_headless_esm.c \
+	$(PROJECT_DIR)/headless/esm/rusefi_headless_engine_mode.c
 
 HEADLESS_INCDIR = \
 	$(PROJECT_DIR)/headless \
