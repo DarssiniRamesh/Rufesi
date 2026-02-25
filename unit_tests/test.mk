@@ -26,6 +26,9 @@ TEST_SRC_CPP = unit_test_framework.cpp \
 	tests/test_speed_density.cpp \
 	tests/test_signal_executor.cpp \
 	tests/test_sensors.cpp \
+	tests/test_headless_can_core.cpp \
+	tests/test_headless_sensors_snapshot.cpp \
+	tests/test_headless_esm.cpp \
 	tests/test_pid_auto.cpp \
 	tests/test_accel_enrichment.cpp \
 	afm2mapConverter.cpp
