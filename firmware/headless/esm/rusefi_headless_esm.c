@@ -11,6 +11,40 @@ void rusefi_esm_init(rusefi_esm_ctx_t* ctx) {
 
 	ctx->state = RUSEFI_ESM_STOPPED;
 	ctx->is_spinning = false;
+
+	/* Tick bookkeeping is intentionally non-functional today (preserve behavior). */
+	ctx->last_fast_tick_time_nt = 0;
+	ctx->last_slow_tick_time_nt = 0;
+}
+
+static int validate_tick_inputs(const rusefi_esm_ctx_t* ctx, const rusefi_esm_deps_t* deps) {
+	(void)ctx;
+	return deps != NULL && deps->get_time_now_nt != NULL;
+}
+
+int rusefi_esm_fast_tick(rusefi_esm_ctx_t* ctx, const rusefi_esm_deps_t* deps) {
+	if (ctx == NULL || !validate_tick_inputs(ctx, deps)) {
+		return -1;
+	}
+
+	/* Preserve existing behavior: do nothing beyond recording time. */
+	ctx->last_fast_tick_time_nt = deps->get_time_now_nt(deps->user_ctx);
+
+	/*
+	 * Optional dependency is accepted to keep signature stable for future logic.
+	 * We intentionally do not fetch snapshot today.
+	 */
+	return 0;
+}
+
+int rusefi_esm_slow_tick(rusefi_esm_ctx_t* ctx, const rusefi_esm_deps_t* deps) {
+	if (ctx == NULL || !validate_tick_inputs(ctx, deps)) {
+		return -1;
+	}
+
+	/* Preserve existing behavior: do nothing beyond recording time. */
+	ctx->last_slow_tick_time_nt = deps->get_time_now_nt(deps->user_ctx);
+	return 0;
 }
 
 bool rusefi_esm_on_rpm(rusefi_esm_ctx_t* ctx, int rpm, int cranking_rpm_threshold) {

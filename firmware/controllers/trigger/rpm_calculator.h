@@ -81,6 +81,22 @@ public:
 	bool checkIfSpinning(efitick_t nowNt DECLARE_ENGINE_PARAMETER_SUFFIX) const;
 
 	/**
+	 * PUBLIC_INTERFACE
+	 * @brief Forward firmware periodic fast tick into the headless ESM.
+	 *
+	 * Current behavior: no-op (ESM records time only) to preserve existing behavior.
+	 */
+	void onEsmFastTick(efitick_t nowNt DECLARE_ENGINE_PARAMETER_SUFFIX);
+
+	/**
+	 * PUBLIC_INTERFACE
+	 * @brief Forward firmware periodic slow tick into the headless ESM.
+	 *
+	 * Current behavior: no-op (ESM records time only) to preserve existing behavior.
+	 */
+	void onEsmSlowTick(efitick_t nowNt DECLARE_ENGINE_PARAMETER_SUFFIX);
+
+	/**
 	 * This accessor is used in unit-tests.
 	 */
 	spinning_state_e getState() const;

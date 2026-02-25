@@ -226,6 +226,9 @@ static void scheduleNextSlowInvocation(void) {
 }
 
 static void periodicFastCallback(DECLARE_ENGINE_PARAMETER_SIGNATURE) {
+	/* Feed periodic tick into headless ESM via RpmCalculator (headless/testable). */
+	engine->rpmCalculator.onEsmFastTick(getTimeNowNt() PASS_ENGINE_PARAMETER_SUFFIX);
+
 	engine->periodicFastCallback();
 	/**
 	 * not many reasons why we use ChibiOS timer and not say a dedicated thread here
@@ -294,6 +297,9 @@ static void periodicSlowCallback(Engine *engine) {
 		invokePerSecond();
 	}
 #endif /* EFI_PROD_CODE */
+
+	/* Feed periodic tick into headless ESM via RpmCalculator (headless/testable). */
+	engine->rpmCalculator.onEsmSlowTick(getTimeNowNt() PASS_ENGINE_PARAMETER_SUFFIX);
 
 	/**
 	 * Update engine RPM state if needed (check timeouts).

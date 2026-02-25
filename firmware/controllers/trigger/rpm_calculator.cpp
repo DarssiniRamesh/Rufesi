@@ -17,6 +17,8 @@
 #include "engine_configuration.h"
 #include "engine_math.h"
 
+#include "sensors_snapshot.h"
+
 #if EFI_PROD_CODE
 #include "rfiutil.h"
 #include "engine.h"
@@ -124,6 +126,49 @@ bool RpmCalculator::isRunning(DECLARE_ENGINE_PARAMETER_SIGNATURE) const {
 /**
  * @return true if engine is spinning (cranking or running)
  */
+static uint64_t fw_get_time_now_nt(void* user_ctx) {
+	(void)user_ctx;
+	return (uint64_t)getTimeNowNt();
+}
+
+static int fw_get_sensors_snapshot(void* user_ctx, rusefi_headless_sensors_snapshot_t* out) {
+	(void)user_ctx;
+	if (out == NULL) {
+		return -1;
+	}
+
+	firmware_sensors_snapshot_t fw = {};
+	int r = readFirmwareSensorsSnapshot(&fw PASS_ENGINE_PARAMETER_SUFFIX);
+	if (r != 0) {
+		return r;
+	}
+
+	*out = fw.snapshot;
+	return 0;
+}
+
+void RpmCalculator::onEsmFastTick(efitick_t nowNt DECLARE_ENGINE_PARAMETER_SUFFIX) {
+	(void)nowNt;
+
+	rusefi_esm_deps_t deps = {};
+	deps.user_ctx = NULL;
+	deps.get_time_now_nt = fw_get_time_now_nt;
+	deps.get_sensors_snapshot = fw_get_sensors_snapshot;
+
+	(void)rusefi_esm_fast_tick(&esm, &deps);
+}
+
+void RpmCalculator::onEsmSlowTick(efitick_t nowNt DECLARE_ENGINE_PARAMETER_SUFFIX) {
+	(void)nowNt;
+
+	rusefi_esm_deps_t deps = {};
+	deps.user_ctx = NULL;
+	deps.get_time_now_nt = fw_get_time_now_nt;
+	deps.get_sensors_snapshot = fw_get_sensors_snapshot;
+
+	(void)rusefi_esm_slow_tick(&esm, &deps);
+}
+
 bool RpmCalculator::checkIfSpinning(efitick_t nowNt DECLARE_ENGINE_PARAMETER_SUFFIX) const {
 	if (ENGINE(needToStopEngine(nowNt))) {
 		return false;

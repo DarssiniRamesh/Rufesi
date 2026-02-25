@@ -25,6 +25,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "rusefi_headless_sensors_snapshot.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -57,7 +59,64 @@ typedef struct {
 	 * enter SPINNING_UP, matching legacy rpm_calculator behavior.
 	 */
 	bool is_spinning;
+
+	/**
+	 * @brief Last observed time for fast/slow tick calls.
+	 *
+	 * These are stored for future ESM features that need elapsed-time accounting. They do NOT
+	 * affect behavior today.
+	 */
+	uint64_t last_fast_tick_time_nt;
+	uint64_t last_slow_tick_time_nt;
 } rusefi_esm_ctx_t;
+
+/* ------------------------------------------------------------------------- */
+/* Tick dependency injection                                                  */
+/* ------------------------------------------------------------------------- */
+
+typedef uint64_t (*rusefi_esm_get_time_now_nt_f)(void* user_ctx);
+
+/**
+ * @brief Optional callback to retrieve a decoded sensor snapshot.
+ *
+ * Implementation note:
+ *  - Return 0 on success and fill *out
+ *  - Return non-zero on error (ESM will ignore snapshot for that tick)
+ */
+typedef int (*rusefi_esm_get_sensors_snapshot_f)(void* user_ctx, rusefi_headless_sensors_snapshot_t* out);
+
+typedef struct {
+	/** User-provided context passed to all callbacks. */
+	void* user_ctx;
+
+	/** Required time source for tick functions. */
+	rusefi_esm_get_time_now_nt_f get_time_now_nt;
+
+	/** Optional: snapshot getter (may be NULL). */
+	rusefi_esm_get_sensors_snapshot_f get_sensors_snapshot;
+} rusefi_esm_deps_t;
+
+/**
+ * PUBLIC_INTERFACE
+ * @brief Perform ESM "fast" periodic processing with injected dependencies.
+ *
+ * This is intentionally headless/testable: the ESM core does not call firmware code directly.
+ *
+ * Current behavior: no-op (records last tick time only) to preserve existing behavior.
+ *
+ * @param ctx  ESM context (non-null).
+ * @param deps Dependency vtable (non-null; deps->get_time_now_nt must be non-null).
+ * @return 0 on success, non-zero on invalid parameters.
+ */
+int rusefi_esm_fast_tick(rusefi_esm_ctx_t* ctx, const rusefi_esm_deps_t* deps);
+
+/**
+ * PUBLIC_INTERFACE
+ * @brief Perform ESM "slow" periodic processing with injected dependencies.
+ *
+ * Current behavior: no-op (records last tick time only) to preserve existing behavior.
+ */
+int rusefi_esm_slow_tick(rusefi_esm_ctx_t* ctx, const rusefi_esm_deps_t* deps);
 
 /**
  * PUBLIC_INTERFACE
