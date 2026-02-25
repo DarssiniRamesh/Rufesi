@@ -221,14 +221,45 @@ static void handleDtcRequest(int numCodes, int *dtcCode, uint8_t payload[8]) {
 	}
 }
 
-#if HAL_USE_CAN || defined(__DOXYGEN__)
-void obdOnCanPacketRx(CANRxFrame *rx) {
-	if (rx->SID != OBD_TEST_REQUEST) {
+#if EFI_CAN_SUPPORT || defined(__DOXYGEN__)
+// PUBLIC_INTERFACE
+void obdOnCanFrameRx(const rusefi_can_frame_t* frame) {
+	/**
+	 * Portable CAN-core RX handler for OBD2.
+	 *
+	 * Contract:
+	 *  - Only standard frames with SID==OBD_TEST_REQUEST are handled (legacy behavior).
+	 *  - Payload is treated as 8 bytes (classic CAN); if DLC < 3, we ignore (safe guard).
+	 */
+	if (frame == NULL) {
 		return;
 	}
-	if (rx->data8[0] == 2 && rx->data8[1] == OBD_CURRENT_DATA) {
-		handleGetDataRequest(rx);
-	} else if (rx->data8[0] == 1 && rx->data8[1] == OBD_STORED_DIAGNOSTIC_TROUBLE_CODES) {
+
+	/* Legacy behavior only handled standard-ID OBD frames */
+	if ((frame->flags & RUSEFI_CAN_FRAME_FLAG_EXT) != 0) {
+		return;
+	}
+
+	const uint32_t sid = frame->id & 0x7FF;
+	if (sid != OBD_TEST_REQUEST) {
+		return;
+	}
+
+	if (frame->dlc < 2) {
+		return;
+	}
+
+	/* Keep existing decode logic by using a stack CANRxFrame as an internal structure. */
+	CANRxFrame rx;
+	memset(&rx, 0, sizeof(rx));
+	rx.IDE = CAN_IDE_STD;
+	rx.SID = (uint16_t)sid;
+	rx.DLC = frame->dlc;
+	memcpy(rx.data8, frame->data, 8);
+
+	if (rx.data8[0] == 2 && rx.data8[1] == OBD_CURRENT_DATA) {
+		handleGetDataRequest(&rx);
+	} else if (rx.data8[0] == 1 && rx.data8[1] == OBD_STORED_DIAGNOSTIC_TROUBLE_CODES) {
 		scheduleMsg(&logger, "Got stored DTC request");
 
 		uint8_t payload[8];
@@ -236,7 +267,7 @@ void obdOnCanPacketRx(CANRxFrame *rx) {
 		// todo: implement stored/pending difference?
 		handleDtcRequest(1, &engine->engineState.warnings.lastErrorCode, payload);
 		obd_send_can_frame(OBD_TEST_RESPONSE, payload);
-	} else if (rx->data8[0] == 1 && rx->data8[1] == OBD_PENDING_DIAGNOSTIC_TROUBLE_CODES) {
+	} else if (rx.data8[0] == 1 && rx.data8[1] == OBD_PENDING_DIAGNOSTIC_TROUBLE_CODES) {
 		scheduleMsg(&logger, "Got pending DTC request");
 
 		uint8_t payload[8];
@@ -247,6 +278,40 @@ void obdOnCanPacketRx(CANRxFrame *rx) {
 	} else {
 		scheduleMsg(&logger, "Got unhandled OBD message");
 	}
+}
+#endif /* EFI_CAN_SUPPORT */
+
+#if HAL_USE_CAN || defined(__DOXYGEN__)
+// PUBLIC_INTERFACE
+void obdOnCanPacketRx(CANRxFrame *rx) {
+	/**
+	 * Legacy shim (CANRxFrame-based) -> portable frame handler.
+	 *
+	 * This function should be considered deprecated for new code. The canonical
+	 * entrypoint is obdOnCanFrameRx().
+	 */
+	if (rx == NULL) {
+		return;
+	}
+
+	rusefi_can_frame_t frame;
+	memset(&frame, 0, sizeof(frame));
+
+	frame.dlc = rx->DLC;
+	memcpy(frame.data, rx->data8, 8);
+
+	if (rx->IDE == CAN_IDE_EXT) {
+		frame.flags |= RUSEFI_CAN_FRAME_FLAG_EXT;
+		frame.id = rx->EID;
+	} else {
+		frame.id = rx->SID;
+	}
+
+	if (rx->RTR == CAN_RTR_REMOTE) {
+		frame.flags |= RUSEFI_CAN_FRAME_FLAG_RTR;
+	}
+
+	obdOnCanFrameRx(&frame);
 }
 #endif /* HAL_USE_CAN */
 

@@ -136,30 +136,13 @@ static void can_log_rx_handler(void* user_ctx, const rusefi_can_frame_t* frame) 
 }
 
 /**
- * RX handler: call legacy OBD2 CAN hook with a reconstructed CANRxFrame.
+ * RX handler: call OBD2 handler using the portable CAN core frame type.
  *
- * We keep the OBD2 code unchanged (it still takes CANRxFrame*), but the
- * dispatch decision now lives in the portable CAN core registry.
+ * This avoids reconstructing platform-specific CANRxFrame in the platform adapter.
  */
 static void can_obd2_rx_handler(void* user_ctx, const rusefi_can_frame_t* frame) {
 	(void)user_ctx;
-
-	CANRxFrame rx;
-	memset(&rx, 0, sizeof(rx));
-
-	if ((frame->flags & RUSEFI_CAN_FRAME_FLAG_EXT) != 0) {
-		rx.IDE = CAN_IDE_EXT;
-		rx.EID = frame->id;
-	} else {
-		rx.IDE = CAN_IDE_STD;
-		rx.SID = frame->id & 0x7FF;
-	}
-
-	rx.RTR = ((frame->flags & RUSEFI_CAN_FRAME_FLAG_RTR) != 0) ? CAN_RTR_REMOTE : CAN_RTR_DATA;
-	rx.DLC = frame->dlc;
-	memcpy(rx.data8, frame->data, 8);
-
-	obdOnCanPacketRx(&rx);
+	obdOnCanFrameRx(frame);
 }
 
 /**

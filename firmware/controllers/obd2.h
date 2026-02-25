@@ -10,6 +10,10 @@
 
 #include "global.h"
 
+#if EFI_CAN_SUPPORT || defined(__DOXYGEN__)
+#include "headless/can/rusefi_can_core.h"
+#endif
+
 #define OBD_TEST_REQUEST 0x7DF
 
 #define OBD_TEST_RESPONSE 0x7E8
@@ -37,7 +41,26 @@
 #define PID_SUPPORTED_PIDS_REQUEST_41_60 0x40
 #define PID_FUEL_RATE 0x5E
 
+#if EFI_CAN_SUPPORT || defined(__DOXYGEN__)
+/**
+ * PUBLIC_INTERFACE
+ * @brief OBD2 receive hook using the portable CAN core frame type.
+ *
+ * Contract:
+ *  - Inputs: `frame` is a classic CAN frame (DLC up to 8). Standard IDs are expected for OBD2.
+ *  - Side effects: may transmit OBD2 response frames via the configured CAN TX adapter.
+ *  - Behavior: unchanged vs legacy `obdOnCanPacketRx()` path.
+ */
+void obdOnCanFrameRx(const rusefi_can_frame_t* frame);
+#endif
+
 #if HAL_USE_CAN || defined(__DOXYGEN__)
+/**
+ * PUBLIC_INTERFACE
+ * @brief Legacy OBD2 CAN receive hook (CANRxFrame-based).
+ *
+ * This remains as a compatibility seam; internally it forwards to obdOnCanFrameRx().
+ */
 void obdOnCanPacketRx(CANRxFrame *rx);
 #endif /* HAL_USE_CAN */
 
