@@ -36,11 +36,38 @@
 #include "engine_math.h"
 #include "fuel_math.h"
 
-
-extern CANTxFrame txmsg;
+#include "headless/can/rusefi_can_core.h"
 
 EXTERN_ENGINE
 ;
+
+/**
+ * Send an OBD2 response frame using the portable CAN core TX interface.
+ *
+ * Contract:
+ *  - Inputs:
+ *      - sid: standard 11-bit CAN identifier (we use STD frames for OBD2)
+ *      - payload: pointer to exactly 8 bytes (CAN classic)
+ *  - Side effects:
+ *      - Transmits a CAN frame via the platform-configured TX interface (can_hw.cpp)
+ *  - Errors:
+ *      - If CAN is not initialized, the frame is dropped (matches legacy "no send" behavior).
+ */
+static void obd_send_can_frame(uint32_t sid, const uint8_t payload[8]) {
+	rusefi_can_core_t* core = canGetCore();
+	if (core == NULL) {
+		// Platform layer not initialized/enabled. Preserve legacy "no send" behavior.
+		return;
+	}
+
+	rusefi_can_frame_t frame;
+	memset(&frame, 0, sizeof(frame));
+	frame.id = sid & 0x7FF;
+	frame.dlc = 8;
+	memcpy(frame.data, payload, 8);
+
+	(void)rusefi_can_core_send(core, &frame);
+}
 
 static LoggingWithStorage logger("obd2");
 
@@ -68,19 +95,20 @@ static const int16_t supportedPids4160[] = {
 };
 
 static void obdSendPacket(int mode, int PID, int numBytes, uint32_t iValue) {
-	commonTxInit(OBD_TEST_RESPONSE);
+	uint8_t payload[8];
+	memset(payload, 0, sizeof(payload));
 
 	// write number of bytes
-	txmsg.data8[0] = (uint8_t)(2 + numBytes);
+	payload[0] = (uint8_t)(2 + numBytes);
 	// write 2 bytes of header
-	txmsg.data8[1] = (uint8_t)(0x40 + mode);
-	txmsg.data8[2] = (uint8_t)PID;
+	payload[1] = (uint8_t)(0x40 + mode);
+	payload[2] = (uint8_t)PID;
 	// write N data bytes
 	for (int i = 8 * (numBytes - 1), j = 3; i >= 0; i -= 8, j++) {
-		txmsg.data8[j] = (uint8_t)((iValue >> i) & 0xff);
+		payload[j] = (uint8_t)((iValue >> i) & 0xff);
 	}
-	
-	sendCanMessage();
+
+	obd_send_can_frame(OBD_TEST_RESPONSE, payload);
 }
 
 static void obdSendValue(int mode, int PID, int numBytes, float value) {
@@ -182,13 +210,14 @@ static void handleGetDataRequest(CANRxFrame *rx) {
 	
 }
 
-static void handleDtcRequest(int numCodes, int *dtcCode) {
+static void handleDtcRequest(int numCodes, int *dtcCode, uint8_t payload[8]) {
 	int numBytes = numCodes * 2;
+
 	// write CAN-TP Single Frame header?
-	txmsg.data8[0] = (uint8_t)((0 << 4) | numBytes);
+	payload[0] = (uint8_t)((0 << 4) | numBytes);
 	for (int i = 0, j = 1; i < numCodes; i++) {
-		txmsg.data8[j++] = (uint8_t)((dtcCode[i] >> 8) & 0xff);
-		txmsg.data8[j++] = (uint8_t)(dtcCode[i] & 0xff);
+		payload[j++] = (uint8_t)((dtcCode[i] >> 8) & 0xff);
+		payload[j++] = (uint8_t)(dtcCode[i] & 0xff);
 	}
 }
 
@@ -201,12 +230,20 @@ void obdOnCanPacketRx(CANRxFrame *rx) {
 		handleGetDataRequest(rx);
 	} else if (rx->data8[0] == 1 && rx->data8[1] == OBD_STORED_DIAGNOSTIC_TROUBLE_CODES) {
 		scheduleMsg(&logger, "Got stored DTC request");
+
+		uint8_t payload[8];
+		memset(payload, 0, sizeof(payload));
 		// todo: implement stored/pending difference?
-		handleDtcRequest(1, &engine->engineState.warnings.lastErrorCode);
+		handleDtcRequest(1, &engine->engineState.warnings.lastErrorCode, payload);
+		obd_send_can_frame(OBD_TEST_RESPONSE, payload);
 	} else if (rx->data8[0] == 1 && rx->data8[1] == OBD_PENDING_DIAGNOSTIC_TROUBLE_CODES) {
 		scheduleMsg(&logger, "Got pending DTC request");
+
+		uint8_t payload[8];
+		memset(payload, 0, sizeof(payload));
 		// todo: implement stored/pending difference?
-		handleDtcRequest(1, &engine->engineState.warnings.lastErrorCode);
+		handleDtcRequest(1, &engine->engineState.warnings.lastErrorCode, payload);
+		obd_send_can_frame(OBD_TEST_RESPONSE, payload);
 	} else {
 		scheduleMsg(&logger, "Got unhandled OBD message");
 	}

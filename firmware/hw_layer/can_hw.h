@@ -13,6 +13,10 @@
 #include "tunerstudio_configuration.h"
 #endif /* EFI_TUNER_STUDIO */
 
+#if EFI_CAN_SUPPORT || defined(__DOXYGEN__)
+#include "headless/can/rusefi_can_core.h"
+#endif
+
 // CAN Bus ID for broadcast
 /**
  * e46 data is from http://forums.bimmerforums.com/forum/showthread.php?1887229
@@ -36,12 +40,19 @@
 #define CAN_VAG_CLT 0x289
 
 void initCan(void);
-void commonTxInit(int eid);
-void sendCanMessage();
 void setCanType(int type);
-void setTxBit(int offset, int index);
 
 #if EFI_CAN_SUPPORT || defined(__DOXYGEN__)
+/**
+ * PUBLIC_INTERFACE
+ * @brief Access the configured portable CAN core instance.
+ *
+ * Contract:
+ *  - Returns non-null only after initCan() has completed and CAN is enabled.
+ *  - Caller must not retain the pointer across deinit/reinit cycles.
+ */
+rusefi_can_core_t* canGetCore(void);
+
 void stopCanPins(DECLARE_ENGINE_PARAMETER_SIGNATURE);
 void startCanPins(DECLARE_ENGINE_PARAMETER_SIGNATURE);
 void enableFrankensoCan(DECLARE_ENGINE_PARAMETER_SIGNATURE);
