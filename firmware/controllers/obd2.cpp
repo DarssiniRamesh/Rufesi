@@ -264,7 +264,7 @@ void obdOnCanFrameRx(const rusefi_can_frame_t* frame) {
 		// todo: implement stored/pending difference?
 		handleDtcRequest(1, &engine->engineState.warnings.lastErrorCode, payload);
 		obd_send_can_frame(OBD_TEST_RESPONSE, payload);
-	} else if (rx.data8[0] == 1 && rx.data8[1] == OBD_PENDING_DIAGNOSTIC_TROUBLE_CODES) {
+	} else if (frame->data[0] == 1 && frame->data[1] == OBD_PENDING_DIAGNOSTIC_TROUBLE_CODES) {
 		scheduleMsg(&logger, "Got pending DTC request");
 
 		uint8_t payload[8];
