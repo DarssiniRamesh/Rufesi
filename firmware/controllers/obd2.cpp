@@ -137,8 +137,9 @@ static void obdWriteSupportedPids(int PID, int bitOffset, const int16_t *support
 	obdSendPacket(1, PID, 4, value);
 }
 
-static void handleGetDataRequest(CANRxFrame *rx) {
-	int pid = rx->data8[2];
+static void handleGetDataRequest(const uint8_t* data) {
+	/* Contract: data points to at least 3 bytes (PID is in byte 2). */
+	int pid = data[2];
 	switch (pid) {
 	case PID_SUPPORTED_PIDS_REQUEST_01_20:
 		scheduleMsg(&logger, "Got lookup request 01-20");
@@ -249,17 +250,13 @@ void obdOnCanFrameRx(const rusefi_can_frame_t* frame) {
 		return;
 	}
 
-	/* Keep existing decode logic by using a stack CANRxFrame as an internal structure. */
-	CANRxFrame rx;
-	memset(&rx, 0, sizeof(rx));
-	rx.IDE = CAN_IDE_STD;
-	rx.SID = (uint16_t)sid;
-	rx.DLC = frame->dlc;
-	memcpy(rx.data8, frame->data, 8);
-
-	if (rx.data8[0] == 2 && rx.data8[1] == OBD_CURRENT_DATA) {
-		handleGetDataRequest(&rx);
-	} else if (rx.data8[0] == 1 && rx.data8[1] == OBD_STORED_DIAGNOSTIC_TROUBLE_CODES) {
+	if (frame->data[0] == 2 && frame->data[1] == OBD_CURRENT_DATA) {
+		/* PID is in byte 2 */
+		if (frame->dlc < 3) {
+			return;
+		}
+		handleGetDataRequest(frame->data);
+	} else if (frame->data[0] == 1 && frame->data[1] == OBD_STORED_DIAGNOSTIC_TROUBLE_CODES) {
 		scheduleMsg(&logger, "Got stored DTC request");
 
 		uint8_t payload[8];
@@ -279,40 +276,4 @@ void obdOnCanFrameRx(const rusefi_can_frame_t* frame) {
 		scheduleMsg(&logger, "Got unhandled OBD message");
 	}
 }
-#endif /* EFI_CAN_SUPPORT */
-
-#if HAL_USE_CAN || defined(__DOXYGEN__)
-// PUBLIC_INTERFACE
-void obdOnCanPacketRx(CANRxFrame *rx) {
-	/**
-	 * Legacy shim (CANRxFrame-based) -> portable frame handler.
-	 *
-	 * This function should be considered deprecated for new code. The canonical
-	 * entrypoint is obdOnCanFrameRx().
-	 */
-	if (rx == NULL) {
-		return;
-	}
-
-	rusefi_can_frame_t frame;
-	memset(&frame, 0, sizeof(frame));
-
-	frame.dlc = rx->DLC;
-	memcpy(frame.data, rx->data8, 8);
-
-	if (rx->IDE == CAN_IDE_EXT) {
-		frame.flags |= RUSEFI_CAN_FRAME_FLAG_EXT;
-		frame.id = rx->EID;
-	} else {
-		frame.id = rx->SID;
-	}
-
-	if (rx->RTR == CAN_RTR_REMOTE) {
-		frame.flags |= RUSEFI_CAN_FRAME_FLAG_RTR;
-	}
-
-	obdOnCanFrameRx(&frame);
-}
-#endif /* HAL_USE_CAN */
-
 #endif /* EFI_CAN_SUPPORT */

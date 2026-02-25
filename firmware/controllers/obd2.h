@@ -54,14 +54,4 @@
 void obdOnCanFrameRx(const rusefi_can_frame_t* frame);
 #endif
 
-#if HAL_USE_CAN || defined(__DOXYGEN__)
-/**
- * PUBLIC_INTERFACE
- * @brief Legacy OBD2 CAN receive hook (CANRxFrame-based).
- *
- * This remains as a compatibility seam; internally it forwards to obdOnCanFrameRx().
- */
-void obdOnCanPacketRx(CANRxFrame *rx);
-#endif /* HAL_USE_CAN */
-
 #endif /* CONTROLLERS_OBD2_H_ */
