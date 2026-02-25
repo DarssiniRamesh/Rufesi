@@ -3498,9 +3498,6 @@
       <name>$PROJ_DIR$\..\controllers\obd2.h</name>
     </file>
     <file>
-      <name>$PROJ_DIR$\..\controllers\obd2viaCAN.c</name>
-    </file>
-    <file>
       <name>$PROJ_DIR$\..\controllers\PwmTester.cpp</name>
     </file>
     <file>
