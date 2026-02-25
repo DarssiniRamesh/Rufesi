@@ -131,29 +131,21 @@ static uint64_t fw_get_time_now_nt(void* user_ctx) {
 	return (uint64_t)getTimeNowNt();
 }
 
-static int fw_get_sensors_snapshot(void* user_ctx, rusefi_headless_sensors_snapshot_t* out) {
-	(void)user_ctx;
-	if (out == NULL) {
-		return -1;
-	}
-
-	firmware_sensors_snapshot_t fw = {};
-	int r = readFirmwareSensorsSnapshot(&fw PASS_ENGINE_PARAMETER_SUFFIX);
-	if (r != 0) {
-		return r;
-	}
-
-	*out = fw.snapshot;
-	return 0;
-}
-
 void RpmCalculator::onEsmFastTick(efitick_t nowNt DECLARE_ENGINE_PARAMETER_SUFFIX) {
 	(void)nowNt;
 
 	rusefi_esm_deps_t deps = {};
 	deps.user_ctx = NULL;
 	deps.get_time_now_nt = fw_get_time_now_nt;
-	deps.get_sensors_snapshot = fw_get_sensors_snapshot;
+
+	/*
+	 * IMPORTANT (behavior preservation + portability):
+	 *  - Headless ESM fast/slow ticks are currently a no-op (they only record timestamps).
+	 *  - Do not inject a firmware-only sensors snapshot getter here because this file is
+	 *    also compiled in simulator/unit-test configurations where engine-parameter
+	 *    macros change call signatures, which would break compilation.
+	 */
+	deps.get_sensors_snapshot = NULL;
 
 	(void)rusefi_esm_fast_tick(&esm, &deps);
 }
@@ -164,7 +156,7 @@ void RpmCalculator::onEsmSlowTick(efitick_t nowNt DECLARE_ENGINE_PARAMETER_SUFFI
 	rusefi_esm_deps_t deps = {};
 	deps.user_ctx = NULL;
 	deps.get_time_now_nt = fw_get_time_now_nt;
-	deps.get_sensors_snapshot = fw_get_sensors_snapshot;
+	deps.get_sensors_snapshot = NULL;
 
 	(void)rusefi_esm_slow_tick(&esm, &deps);
 }
