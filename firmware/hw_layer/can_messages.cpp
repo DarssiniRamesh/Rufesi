@@ -55,12 +55,6 @@ void commonTxInit(int eid) {
 	txmsg.DLC = 8;
 }
 
-/**
- * Implemented in can_hw.cpp (platform glue) to provide access to the configured
- * portable CAN core instance.
- */
-extern rusefi_can_core_t* canGetCore(void);
-
 static void sendCanMessage2(int size) {
 	rusefi_can_core_t* core = canGetCore();
 	if (core == NULL) {

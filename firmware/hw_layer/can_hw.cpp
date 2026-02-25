@@ -79,11 +79,16 @@ extern void canInfoNBCBroadcast(can_nbc_e typeOfNBC);
  * PUBLIC_INTERFACE
  * @brief Provide access to the configured portable CAN core instance.
  *
- * This is used by can_messages.cpp to send frames via rusefi_can_core_send()
+ * Contract:
+ *  - Returns NULL until initCan() has enabled CAN and initialized the portable core/tx iface.
+ *  - Callers must not retain the pointer across deinit/reinit cycles.
+ *
+ * This is used by can_messages.cpp/obd2.cpp to send frames via rusefi_can_core_send()
  * without including platform-specific IO.
  */
 rusefi_can_core_t* canGetCore(void) {
-	return &s_can_core;
+	/* Preserve legacy behavior: when CAN is disabled/not initialized, TX calls are dropped. */
+	return isCanEnabled ? &s_can_core : NULL;
 }
 
 static uint8_t rx_flags_from_chibios(const CANRxFrame* rx) {
