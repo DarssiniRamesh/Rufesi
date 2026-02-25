@@ -1,7 +1,7 @@
 #include "global.h"
 
 extern "C" {
-#include "firmware/headless/sensors/rusefi_headless_sensors_snapshot.h"
+#include "rusefi_headless_sensors_snapshot.h"
 }
 
 #include <cmath>

@@ -48,7 +48,6 @@ endif
 # Architecture or project specific options
 #
 
-
 # List all default C defines here, like -D_DEBUG=1
 DDEFS =
 
@@ -158,13 +157,12 @@ INCDIR = . \
 	$(PROJECT_DIR)/hw_layer/algo \
 	$(PROJECT_DIR)/hw_layer/sensors/ \
 	$(HEADLESS_INCDIR) \
-	test_data_structures \
 	googletest/googlemock/include \
 	googletest/googletest \
 	googletest/googletest/include \
 	tests \
 	test_basic_math
-	
+
 
 #
 # Project, sources and paths

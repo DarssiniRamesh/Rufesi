@@ -1,7 +1,7 @@
 #include "global.h"
 
 extern "C" {
-#include "firmware/headless/can/rusefi_can_core.h"
+#include "rusefi_can_core.h"
 }
 
 #include <cstring>

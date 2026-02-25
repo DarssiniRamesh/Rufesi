@@ -1,7 +1,7 @@
 #include "global.h"
 
 extern "C" {
-#include "firmware/headless/esm/rusefi_headless_esm.h"
+#include "rusefi_headless_esm.h"
 }
 
 namespace {
