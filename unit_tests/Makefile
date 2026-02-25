@@ -79,6 +79,7 @@ include $(PROJECT_DIR)/controllers/system/system.mk
 include $(PROJECT_DIR)/controllers/sensors/sensors.mk
 include $(PROJECT_DIR)/controllers/trigger/trigger.mk
 include $(PROJECT_DIR)/hw_layer/hw_layer.mk
+include $(PROJECT_DIR)/headless/headless.mk
 include $(PROJECT_DIR)/hw_layer/sensors/sensors.mk
 include test.mk
 
@@ -93,6 +94,7 @@ CSRC =	$(UTILSRC) \
 	$(CONTROLLERS_CORE_SRC) \
 	$(CONTROLLERS_MATH_SRC) \
 	$(CONTROLLERS_SENSORS_SRC) \
+	$(HEADLESS_SRC) \
 	$(ENGINES_SRC) \
 	$(TEST_SRC_C)
 
@@ -155,6 +157,7 @@ INCDIR = . \
 	$(PROJECT_DIR)/hw_layer \
 	$(PROJECT_DIR)/hw_layer/algo \
 	$(PROJECT_DIR)/hw_layer/sensors/ \
+	$(HEADLESS_INCDIR) \
 	test_data_structures \
 	googletest/googlemock/include \
 	googletest/googletest \

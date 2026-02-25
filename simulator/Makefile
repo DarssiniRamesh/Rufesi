@@ -110,6 +110,7 @@ include $(PROJECT_DIR)/controllers/math/math.mk
 include $(PROJECT_DIR)/controllers/sensors/sensors.mk
 include $(PROJECT_DIR)/controllers/trigger/trigger.mk
 include $(PROJECT_DIR)/controllers/system/system.mk
+include $(PROJECT_DIR)/headless/headless.mk
 include $(PROJECT_DIR)/console/console.mk
 include $(PROJECT_DIR)/console/binary/tunerstudio.mk
 include $(PROJECT_DIR)/development/development.mk
@@ -127,6 +128,7 @@ CSRC =  ${PORTSRC} \
         $(CONTROLLERS_ALGO_SRC) \
         $(CONTROLLERS_CORE_SRC) \
         $(CONTROLLERS_SENSORS_SRC) \
+        $(HEADLESS_SRC) \
         $(ENGINES_SRC) \
         $(BOARDSRC) \
         $(CHIBIOS)/os/hal/lib/streams/memstreams.c \
@@ -188,6 +190,7 @@ INCDIR = . \
           $(PROJECT_DIR)/controllers/system \
           $(PROJECT_DIR)/controllers/trigger \
           $(PROJECT_DIR)/controllers/trigger/decoders \
+          $(HEADLESS_INCDIR) \
           ${CHIBIOS}/os/various \
           $(CHIBIOS)/os/hal/lib/streams \
           simulator

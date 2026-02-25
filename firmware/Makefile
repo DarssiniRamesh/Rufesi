@@ -146,6 +146,7 @@ include $(PROJECT_DIR)/controllers/math/math.mk
 include $(PROJECT_DIR)/controllers/sensors/sensors.mk
 include $(PROJECT_DIR)/controllers/system/system.mk
 include $(PROJECT_DIR)/controllers/trigger/trigger.mk
+include $(PROJECT_DIR)/headless/headless.mk
 include $(PROJECT_DIR)/console/console.mk
 
 ifeq ($(USE_BOOTLOADER),yes)
@@ -185,6 +186,7 @@ CSRC = $(STARTUPSRC) \
 	$(CONTROLLERS_ALGO_SRC) \
 	$(CONTROLLERS_CORE_SRC) \
 	$(CONTROLLERS_SENSORS_SRC) \
+	$(HEADLESS_SRC) \
 	$(FATFSSRC) \
 	$(SYSTEMSRC)
 
@@ -281,7 +283,8 @@ INCDIR = $(CHIBIOS)/os/license \
 	controllers/core \
 	controllers/math \
 	controllers/trigger/decoders \
-	controllers/trigger
+	controllers/trigger \
+	$(HEADLESS_INCDIR)
 
 #
 # Project, sources and paths
