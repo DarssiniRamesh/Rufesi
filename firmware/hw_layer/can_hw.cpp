@@ -21,6 +21,7 @@
 #include "mpu_util.h"
 #include "engine_state.h"
 #include "vehicle_speed.h"
+#include "hal/hal_can.h"
 
 EXTERN_ENGINE
 ;
@@ -113,8 +114,8 @@ static void sendCanMessage2(int size) {
 	}
 	txmsg.DLC = size;
 	// 1 second timeout
-	msg_t result = canTransmit(device, CAN_ANY_MAILBOX, &txmsg, TIME_MS2I(1000));
-	if (result == MSG_OK) {
+	int result = hal_can_transmit((hal_can_driver_t)device, CAN_ANY_MAILBOX, &txmsg, 1000);
+	if (result == 0) {
 		canWriteOk++;
 	} else {
 		canWriteNotOk++;
@@ -234,8 +235,8 @@ static void canRead(void) {
 		return;
 	}
 //	scheduleMsg(&logger, "Waiting for CAN");
-	msg_t result = canReceive(device, CAN_ANY_MAILBOX, &rxBuffer, TIME_MS2I(1000));
-	if (result == MSG_TIMEOUT) {
+	int result = hal_can_receive((hal_can_driver_t)device, CAN_ANY_MAILBOX, &rxBuffer, 1000);
+	if (result != 0) {
 		return;
 	}
 
@@ -327,10 +328,10 @@ void initCan(void) {
 
 #if STM32_CAN_USE_CAN2 || defined(__DOXYGEN__)
 	// CAN1 is required for CAN2
-	canStart(&CAND1, &canConfig500);
-	canStart(&CAND2, &canConfig500);
+	hal_can_start(hal_can_get_driver(HAL_CAN_DRIVER_1), &canConfig500);
+	hal_can_start(hal_can_get_driver(HAL_CAN_DRIVER_2), &canConfig500);
 #else
-	canStart(&CAND1, &canConfig500);
+	hal_can_start(hal_can_get_driver(HAL_CAN_DRIVER_1), &canConfig500);
 #endif /* STM32_CAN_USE_CAN2 */
 
 	chThdCreateStatic(canTreadStack, sizeof(canTreadStack), NORMALPRIO, (tfunc_t)(void*) canThread, NULL);

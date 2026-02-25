@@ -9,6 +9,7 @@
 #include "global.h"
 #include "engine.h"
 #include "efiGpio.h"
+#include "hal/hal_gpio.h"
 
 #if EFI_GPIO_HARDWARE || defined(__DOXYGEN__)
 #include "pin_repository.h"
@@ -60,7 +61,7 @@ EnginePins::EnginePins() {
 #define setPinValue(outputPin, electricalValue, logicValue)                        \
   {                                                                                \
     if ((outputPin)->currentLogicValue != (logicValue)) {                          \
-	  palWritePad((outputPin)->port, (outputPin)->pin, (electricalValue));         \
+	  hal_gpio_write((hal_gpio_port_t)(outputPin)->port, (outputPin)->pin, (electricalValue));         \
 	  (outputPin)->currentLogicValue = (logicValue);                               \
     }                                                                              \
   }

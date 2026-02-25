@@ -23,6 +23,9 @@
 #include "rfiutil.h"
 #include "tunerstudio.h"
 
+#include "hal/hal_gpio.h"
+#include "hal/hal_uart.h"
+
 #if EFI_SIMULATOR || defined(__DOXYGEN__)
 #include "rusEfiFunctionalTest.h"
 #endif /*EFI_SIMULATOR */
@@ -265,7 +268,7 @@ void startConsole(Logging *sharedLogger, CommandHandler console_line_callback_p)
 
 #if (defined(EFI_CONSOLE_UART_DEVICE) && ! EFI_SIMULATOR) || defined(__DOXYGEN__)
 
-	palSetPadMode(CONSOLE_MODE_SWITCH_PORT, CONSOLE_MODE_SWITCH_PIN, PAL_MODE_INPUT_PULLUP);
+	hal_gpio_set_mode_raw((hal_gpio_port_t)CONSOLE_MODE_SWITCH_PORT, CONSOLE_MODE_SWITCH_PIN, PAL_MODE_INPUT_PULLUP);
 
 	b_isCommandLineConsoleOverTTL = GET_CONSOLE_MODE_VALUE() == EFI_USE_UART_FOR_CONSOLE;
 
@@ -275,11 +278,11 @@ void startConsole(Logging *sharedLogger, CommandHandler console_line_callback_p)
 		 * it is important to set 'NONE' as flow control! in terminal application on the PC
 		 */
 		serialConfig.speed = engineConfiguration->uartConsoleSerialSpeed;
-		sdStart(EFI_CONSOLE_UART_DEVICE, &serialConfig);
+		hal_uart_sd_start((void*)EFI_CONSOLE_UART_DEVICE, &serialConfig);
 
 // cannot use pin repository here because pin repository prints to console
-		palSetPadMode(EFI_CONSOLE_RX_PORT, EFI_CONSOLE_RX_PIN, PAL_MODE_ALTERNATE(EFI_CONSOLE_AF));
-		palSetPadMode(EFI_CONSOLE_TX_PORT, EFI_CONSOLE_TX_PIN, PAL_MODE_ALTERNATE(EFI_CONSOLE_AF));
+		hal_gpio_set_mode_raw((hal_gpio_port_t)EFI_CONSOLE_RX_PORT, EFI_CONSOLE_RX_PIN, PAL_MODE_ALTERNATE(EFI_CONSOLE_AF));
+		hal_gpio_set_mode_raw((hal_gpio_port_t)EFI_CONSOLE_TX_PORT, EFI_CONSOLE_TX_PIN, PAL_MODE_ALTERNATE(EFI_CONSOLE_AF));
 
 		isSerialConsoleStarted = true;
 
