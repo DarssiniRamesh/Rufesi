@@ -16,6 +16,8 @@
 #include "engine_configuration.h"
 #include "engine_math.h"
 
+#include "rusefi_headless_sensors.h"
+
 #define _5_VOLTS 5.0
 
 // Celsius
@@ -33,27 +35,25 @@ static Logging *logger = NULL;
  * http://en.wikipedia.org/wiki/Voltage_divider
  */
 float getR1InVoltageDividor(float Vout, float Vin, float r2) {
-	return r2 * Vin / Vout - r2;
+	return rusefi_headless_voltage_divider_r1(Vout, Vin, r2);
 }
 
 float getR2InVoltageDividor(float Vout, float Vin, float r1) {
-	if (Vout == 0) {
-		return NAN;
-	}
-	return r1 / (Vin / Vout - 1);
+	return rusefi_headless_voltage_divider_r2(Vout, Vin, r1);
 }
 
 float getVoutInVoltageDividor(float Vin, float r1, float r2) {
-	return r2 * Vin / (r1 + r2);
+	return rusefi_headless_voltage_divider_vout(Vin, r1, r2);
 }
 
 float ThermistorMath::getKelvinTemperatureByResistance(float resistance) const {
-	if (resistance <= 0) {
-		//warning("Invalid resistance in getKelvinTemperature=", resistance);
-		return 0.0f;
-	}
-	float logR = logf(resistance);
-	return 1 / (s_h_a + s_h_b * logR + s_h_c * logR * logR * logR);
+	rusefi_steinhart_hart_coeffs_t c = {
+		.s_h_a = s_h_a,
+		.s_h_b = s_h_b,
+		.s_h_c = s_h_c
+	};
+
+	return rusefi_headless_thermistor_kelvin_from_resistance(resistance, &c);
 }
 
 float convertCelsiustoF(float tempC) {
@@ -177,9 +177,23 @@ void ThermistorMath::prepareThermistorCurve(thermistor_conf_s *tc) {
 	float U3 = (Y3 - Y1) / (L3 - L1);
 
 
-	s_h_c = (U3 - U2) / (L3 - L2) * pow(L1 + L2 + L3, -1);
-	s_h_b = U2 - s_h_c * (L1 * L1 + L1 * L2 + L2 * L2);
-	s_h_a = Y1 - (s_h_b + L1 * L1 * s_h_c) * L1;
+	rusefi_steinhart_hart_coeffs_t out;
+	int rc = rusefi_headless_steinhart_hart_from_3points(
+		T1, tc->resistance_1,
+		T2, tc->resistance_2,
+		T3, tc->resistance_3,
+		&out
+	);
+
+	if (rc != 0) {
+		// Legacy behavior had no explicit error return here, so preserve best-effort:
+		// keep existing coefficients unchanged if computation fails.
+		return;
+	}
+
+	s_h_a = out.s_h_a;
+	s_h_b = out.s_h_b;
+	s_h_c = out.s_h_c;
 
 #if EXTREME_TERM_LOGGING || defined(__DOXYGEN__)
 	scheduleMsg(logger, "Y1=%.5f/Y2=%.5f/Y3=%.5f", Y1, Y2, Y3);

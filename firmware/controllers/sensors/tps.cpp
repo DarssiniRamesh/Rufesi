@@ -6,6 +6,8 @@
 #include "interpolation.h"
 #include "analog_input.h"
 
+#include "rusefi_headless_sensors.h"
+
 	EXTERN_ENGINE;
 
 #if !EFI_PROD_CODE
@@ -76,22 +78,32 @@ percent_t getTpsValue(int adc DECLARE_ENGINE_PARAMETER_SUFFIX) {
 		warning(CUSTOM_INVALID_TPS_SETTING, "Invalid TPS configuration: same value %d", engineConfiguration->tpsMin);
 		return NAN;
 	}
-	float result = interpolateMsg("TPS", TPS_TS_CONVERSION * engineConfiguration->tpsMax, 100, TPS_TS_CONVERSION * engineConfiguration->tpsMin, 0, adc);
-	if (result < engineConfiguration->tpsErrorDetectionTooLow) {
+
+	rusefi_tps_config_t cfg = {
+		.tps_min_adc12 = engineConfiguration->tpsMin,
+		.tps_max_adc12 = engineConfiguration->tpsMax,
+		.error_detection_too_low = engineConfiguration->tpsErrorDetectionTooLow,
+		.error_detection_too_high = engineConfiguration->tpsErrorDetectionTooHigh
+	};
+
+	rusefi_tps_decode_result_t r = rusefi_headless_decode_tps_percent(adc, &cfg);
+
+	if (r.flags & RUSEFI_TPS_DECODE_FLAG_TOO_LOW) {
 #if EFI_PROD_CODE || defined(__DOXYGEN__)
 		// too much noise with simulator
-		warning(OBD_Throttle_Position_Sensor_Circuit_Malfunction, "TPS too low: %.2f", result);
+		warning(OBD_Throttle_Position_Sensor_Circuit_Malfunction, "TPS too low: %.2f", r.percent_unclamped);
 #endif /* EFI_PROD_CODE */
 	}
-	if (result > engineConfiguration->tpsErrorDetectionTooHigh) {
+
+	if (r.flags & RUSEFI_TPS_DECODE_FLAG_TOO_HIGH) {
 #if EFI_PROD_CODE || defined(__DOXYGEN__)
 		// too much noise with simulator
-		warning(OBD_Throttle_Position_Sensor_Range_Performance_Problem, "TPS too high: %.2f", result);
+		warning(OBD_Throttle_Position_Sensor_Range_Performance_Problem, "TPS too high: %.2f", r.percent_unclamped);
 #endif /* EFI_PROD_CODE */
 	}
 
 	// this would put the value into the 0-100 range
-	return maxF(0, minF(100, result));
+	return r.percent_clamped;
 }
 
 /*

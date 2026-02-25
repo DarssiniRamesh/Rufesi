@@ -13,6 +13,8 @@
 #include "map.h"
 #include "engine_controller.h"
 
+#include "rusefi_headless_sensors.h"
+
 #if EFI_PROD_CODE || defined(__DOXYGEN__)
 #include "digital_input_hw.h"
 #include "pin_repository.h"
@@ -79,24 +81,71 @@ static FastInterpolation *mapDecoder;
 static FastInterpolation *getDecoder(air_pressure_sensor_type_e type);
 
 float decodePressure(float voltage, air_pressure_sensor_config_s * mapConfig DECLARE_ENGINE_PARAMETER_SUFFIX) {
+	/*
+	 * Step 01.05 refactor: keep legacy public API/behavior but move the pure decode math
+	 * into the headless sensors module.
+	 *
+	 * IMPORTANT: Preserve historical quirks:
+	 *  - MT_CUSTOM uses custom low/high voltage (mapLowValueVoltage/mapHighValueVoltage)
+	 *  - MT_MPX4100 historically went through getDecoder(), which did NOT have a decoder entry,
+	 *    causing a firmwareError("Unknown MAP type: d %d") and then falling back to customMap
+	 *    initialized as 0..5V -> low/high kPa. We preserve that exact behavior.
+	 */
+	rusefi_map_config_t cfg = {};
+
 	switch (mapConfig->type) {
-	case MT_CUSTOM:
-		// todo: migrate to 'FastInterpolation customMap'
-		return interpolateMsg("map", engineConfiguration->mapLowValueVoltage, mapConfig->lowValue,
-				engineConfiguration->mapHighValueVoltage, mapConfig->highValue, voltage);
-	case MT_DENSO183:
-	case MT_MPX4250:
-	case MT_MPX4250A:
-	case MT_HONDA3BAR:
-	case MT_DODGE_NEON_2003:
-	case MT_SUBY_DENSO:
-	case MT_GM_3_BAR:
-	case MT_TOYOTA_89420_02010:
-	case MT_MPX4100:
-		return getDecoder(mapConfig->type)->getValue(voltage);
-	default:
-		firmwareError(CUSTOM_ERR_MAP_TYPE, "Unknown MAP type: p %d", mapConfig->type);
-		return NAN;
+		case MT_CUSTOM:
+			cfg.type = RUSEFI_MAP_TYPE_CUSTOM_LINEAR;
+			cfg.low_voltage = engineConfiguration->mapLowValueVoltage;
+			cfg.high_voltage = engineConfiguration->mapHighValueVoltage;
+			cfg.low_kpa = mapConfig->lowValue;
+			cfg.high_kpa = mapConfig->highValue;
+			return rusefi_headless_decode_map_kpa(voltage, &cfg);
+
+		case MT_DENSO183:
+			cfg.type = RUSEFI_MAP_TYPE_DENSO183;
+			return rusefi_headless_decode_map_kpa(voltage, &cfg);
+
+		case MT_MPX4250:
+			cfg.type = RUSEFI_MAP_TYPE_MPX4250;
+			return rusefi_headless_decode_map_kpa(voltage, &cfg);
+
+		case MT_MPX4250A:
+			cfg.type = RUSEFI_MAP_TYPE_MPX4250A;
+			return rusefi_headless_decode_map_kpa(voltage, &cfg);
+
+		case MT_HONDA3BAR:
+			cfg.type = RUSEFI_MAP_TYPE_HONDA3BAR;
+			return rusefi_headless_decode_map_kpa(voltage, &cfg);
+
+		case MT_DODGE_NEON_2003:
+			cfg.type = RUSEFI_MAP_TYPE_DODGE_NEON_2003;
+			return rusefi_headless_decode_map_kpa(voltage, &cfg);
+
+		case MT_SUBY_DENSO:
+			cfg.type = RUSEFI_MAP_TYPE_SUBY_DENSO;
+			return rusefi_headless_decode_map_kpa(voltage, &cfg);
+
+		case MT_GM_3_BAR:
+			cfg.type = RUSEFI_MAP_TYPE_GM_3_BAR;
+			return rusefi_headless_decode_map_kpa(voltage, &cfg);
+
+		case MT_TOYOTA_89420_02010:
+			cfg.type = RUSEFI_MAP_TYPE_TOYOTA_89420_02010;
+			return rusefi_headless_decode_map_kpa(voltage, &cfg);
+
+		case MT_MPX4100:
+			/* Preserve legacy getDecoder() default branch error message and fallback behavior. */
+			firmwareError(CUSTOM_ERR_MAP_TYPE, "Unknown MAP type: d %d", mapConfig->type);
+
+			cfg.type = RUSEFI_MAP_TYPE_FALLBACK_0_5_LINEAR;
+			cfg.fallback_low_kpa = mapConfig->lowValue;
+			cfg.fallback_high_kpa = mapConfig->highValue;
+			return rusefi_headless_decode_map_kpa(voltage, &cfg);
+
+		default:
+			firmwareError(CUSTOM_ERR_MAP_TYPE, "Unknown MAP type: p %d", mapConfig->type);
+			return NAN;
 	}
 }
 
