@@ -17,8 +17,6 @@
 #include "engine_configuration.h"
 #include "engine_math.h"
 
-#include "sensors_snapshot.h"
-
 #if EFI_PROD_CODE
 #include "rfiutil.h"
 #include "engine.h"
