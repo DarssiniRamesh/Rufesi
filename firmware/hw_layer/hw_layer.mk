@@ -1,7 +1,9 @@
 HW_LAYER_EGT = $(PROJECT_DIR)/hw_layer/serial_over_usb/usbcfg.c \
-	$(PROJECT_DIR)/hw_layer/serial_over_usb/usbconsole.c
+	$(PROJECT_DIR)/hw_layer/serial_over_usb/usbconsole.c \
+	$(PROJECT_DIR)/headless/can/rusefi_can_core.c
 
 HW_LAYER_EGT_CPP = $(PROJECT_DIR)/hw_layer/can_hw.cpp \
+	$(PROJECT_DIR)/hw_layer/can_messages.cpp \
 	$(PROJECT_DIR)/hw_layer/max31855.cpp
 
 HW_LAYER_EMS = $(HW_LAYER_EGT) \

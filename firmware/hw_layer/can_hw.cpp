@@ -1,9 +1,13 @@
 /**
  * @file	can_hw.cpp
- * @brief	CAN bus low level code
+ * @brief	CAN bus platform glue (STM32/ChibiOS + rusEFI platform integration).
  *
- * todo: this file should be split into two - one for CAN transport level ONLY and
- * another one with actual messages
+ * Step 01.04 refactor:
+ *  - Keep STM32/ChibiOS-specific IO (detectCanDevice/hal_can_* and threading) here.
+ *  - Move message encoding/composition to can_messages.cpp
+ *  - Perform RX dispatch and TX via the portable CAN core API (rusefi_can_core).
+ *
+ * Behavior should remain unchanged.
  *
  * @date Dec 11, 2013
  * @author Andrey Belomutskiy, (c) 2012-2018
@@ -19,9 +23,9 @@
 #include "string.h"
 #include "obd2.h"
 #include "mpu_util.h"
-#include "engine_state.h"
-#include "vehicle_speed.h"
 #include "hal/hal_can.h"
+
+#include "headless/can/rusefi_can_core.h"
 
 EXTERN_ENGINE
 ;
@@ -41,223 +45,225 @@ static THD_WORKING_AREA(canTreadStack, UTILITY_THREAD_STACK_SIZE);
  *
  * speed = 42000000 / (BRP + 1) / (1 + TS1 + 1 + TS2 + 1)
  * 42000000 / 7 / 12 = 500000
- *
- * 29 bit would be CAN_TI0R_EXID (?) but we do not mention it here
- * CAN_TI0R_STID "Standard Identifier or Extended Identifier"? not mentioned as well
  */
 static const CANConfig canConfig500 = {
-CAN_MCR_ABOM | CAN_MCR_AWUM | CAN_MCR_TXFP,
-CAN_BTR_SJW(0) | CAN_BTR_TS2(1) | CAN_BTR_TS1(8) | CAN_BTR_BRP(6) };
+	CAN_MCR_ABOM | CAN_MCR_AWUM | CAN_MCR_TXFP,
+	CAN_BTR_SJW(0) | CAN_BTR_TS2(1) | CAN_BTR_TS1(8) | CAN_BTR_BRP(6)
+};
 
 /*
  * speed = 42000000 / (BRP + 1) / (1 + TS1 + 1 + TS2 + 1)
  * 42000000 / 7 / 6 = 1000000
- *
  */
 static const CANConfig canConfig1000 = {
-CAN_MCR_ABOM | CAN_MCR_AWUM | CAN_MCR_TXFP,
-CAN_BTR_SJW(0) | CAN_BTR_TS2(1) | CAN_BTR_TS1(2) | CAN_BTR_BRP(6) };
+	CAN_MCR_ABOM | CAN_MCR_AWUM | CAN_MCR_TXFP,
+	CAN_BTR_SJW(0) | CAN_BTR_TS2(1) | CAN_BTR_TS1(2) | CAN_BTR_BRP(6)
+};
 
 // 42000000 / 14 / 12 = 250000
-
 // todo: validate this
 static const CANConfig canConfig250 = {
-CAN_MCR_ABOM | CAN_MCR_AWUM | CAN_MCR_TXFP,
-CAN_BTR_SJW(0) | CAN_BTR_TS2(1) | CAN_BTR_TS1(8) | CAN_BTR_BRP(13) };
-
+	CAN_MCR_ABOM | CAN_MCR_AWUM | CAN_MCR_TXFP,
+	CAN_BTR_SJW(0) | CAN_BTR_TS2(1) | CAN_BTR_TS1(8) | CAN_BTR_BRP(13)
+};
 
 static CANRxFrame rxBuffer;
-CANTxFrame txmsg;
 
-static void printPacket(CANRxFrame *rx) {
-//	scheduleMsg(&logger, "CAN FMI %x", rx->FMI);
-//	scheduleMsg(&logger, "TIME %x", rx->TIME);
-	scheduleMsg(&logger, "Got CAN message: SID %x/%x %x %x %x %x %x %x %x %x", rx->SID, rx->DLC, rx->data8[0], rx->data8[1],
-			rx->data8[2], rx->data8[3], rx->data8[4], rx->data8[5], rx->data8[6], rx->data8[7]);
+/* Portable CAN core instance for dispatch + TX indirection. */
+static rusefi_can_core_t s_can_core;
 
-	if (rx->SID == CAN_BMW_E46_CLUSTER_STATUS) {
-		int odometerKm = 10 * (rx->data8[1] << 8) + rx->data8[0];
-		int odometerMi = (int) (odometerKm * 0.621371);
+/* message encoder provides this */
+extern void canInfoNBCBroadcast(can_nbc_e typeOfNBC);
+
+/**
+ * PUBLIC_INTERFACE
+ * @brief Provide access to the configured portable CAN core instance.
+ *
+ * This is used by can_messages.cpp to send frames via rusefi_can_core_send()
+ * without including platform-specific IO.
+ */
+rusefi_can_core_t* canGetCore(void) {
+	return &s_can_core;
+}
+
+static uint8_t rx_flags_from_chibios(const CANRxFrame* rx) {
+	uint8_t flags = 0;
+
+	if (rx->IDE == CAN_IDE_EXT) {
+		flags |= RUSEFI_CAN_FRAME_FLAG_EXT;
+	}
+	if (rx->RTR == CAN_RTR_REMOTE) {
+		flags |= RUSEFI_CAN_FRAME_FLAG_RTR;
+	}
+
+	return flags;
+}
+
+static uint32_t rx_id_from_chibios(const CANRxFrame* rx) {
+	if (rx->IDE == CAN_IDE_EXT) {
+		return (uint32_t)rx->EID;
+	}
+	return (uint32_t)rx->SID;
+}
+
+/**
+ * RX handler: preserve legacy "printPacket" logging behavior.
+ */
+static void can_log_rx_handler(void* user_ctx, const rusefi_can_frame_t* frame) {
+	(void)user_ctx;
+
+	scheduleMsg(&logger,
+		"Got CAN message: SID %x/%x %x %x %x %x %x %x %x %x",
+		(unsigned int)frame->id,
+		(unsigned int)frame->dlc,
+		frame->data[0], frame->data[1], frame->data[2], frame->data[3],
+		frame->data[4], frame->data[5], frame->data[6], frame->data[7]
+	);
+
+	if (frame->id == CAN_BMW_E46_CLUSTER_STATUS) {
+		int odometerKm = 10 * (frame->data[1] << 8) + frame->data[0];
+		int odometerMi = (int)(odometerKm * 0.621371);
 		scheduleMsg(&logger, "GOT odometerKm %d", odometerKm);
 		scheduleMsg(&logger, "GOT odometerMi %d", odometerMi);
-		int timeValue = (rx->data8[4] << 8) + rx->data8[3];
+		int timeValue = (frame->data[4] << 8) + frame->data[3];
 		scheduleMsg(&logger, "GOT time %d", timeValue);
 	}
 }
 
-static void setShortValue(CANTxFrame *txmsg, int value, int offset) {
-	txmsg->data8[offset] = value;
-	txmsg->data8[offset + 1] = value >> 8;
-}
+/**
+ * RX handler: call legacy OBD2 CAN hook with a reconstructed CANRxFrame.
+ *
+ * We keep the OBD2 code unchanged (it still takes CANRxFrame*), but the
+ * dispatch decision now lives in the portable CAN core registry.
+ */
+static void can_obd2_rx_handler(void* user_ctx, const rusefi_can_frame_t* frame) {
+	(void)user_ctx;
 
-void setTxBit(int offset, int index) {
-	txmsg.data8[offset] = txmsg.data8[offset] | (1 << index);
-}
+	CANRxFrame rx;
+	memset(&rx, 0, sizeof(rx));
 
-void commonTxInit(int eid) {
-	memset(&txmsg, 0, sizeof(txmsg));
-	txmsg.IDE = CAN_IDE_STD;
-	txmsg.EID = eid;
-	txmsg.RTR = CAN_RTR_DATA;
-	txmsg.DLC = 8;
+	if ((frame->flags & RUSEFI_CAN_FRAME_FLAG_EXT) != 0) {
+		rx.IDE = CAN_IDE_EXT;
+		rx.EID = frame->id;
+	} else {
+		rx.IDE = CAN_IDE_STD;
+		rx.SID = frame->id & 0x7FF;
+	}
+
+	rx.RTR = ((frame->flags & RUSEFI_CAN_FRAME_FLAG_RTR) != 0) ? CAN_RTR_REMOTE : CAN_RTR_DATA;
+	rx.DLC = frame->dlc;
+	memcpy(rx.data8, frame->data, 8);
+
+	obdOnCanPacketRx(&rx);
 }
 
 /**
- * send CAN message from txmsg buffer
+ * TX adapter for portable core -> platform transmit
  */
-static void sendCanMessage2(int size) {
-	CANDriver *device = detectCanDevice(CONFIGB(canRxPin),
-			CONFIGB(canTxPin));
+static int can_platform_send(void* user_ctx, const rusefi_can_frame_t* frame) {
+	(void)user_ctx;
+
+	CANDriver* device = detectCanDevice(CONFIGB(canRxPin), CONFIGB(canTxPin));
 	if (device == NULL) {
 		warning(CUSTOM_ERR_CAN_CONFIGURATION, "CAN configuration issue");
-		return;
+		return -1;
 	}
-	txmsg.DLC = size;
+
+	CANTxFrame tx;
+	memset(&tx, 0, sizeof(tx));
+
+	if ((frame->flags & RUSEFI_CAN_FRAME_FLAG_EXT) != 0) {
+		tx.IDE = CAN_IDE_EXT;
+		tx.EID = frame->id;
+	} else {
+		tx.IDE = CAN_IDE_STD;
+		tx.SID = frame->id & 0x7FF;
+		/* For compatibility with some existing code patterns, also set EID. */
+		tx.EID = frame->id;
+	}
+
+	tx.RTR = ((frame->flags & RUSEFI_CAN_FRAME_FLAG_RTR) != 0) ? CAN_RTR_REMOTE : CAN_RTR_DATA;
+	tx.DLC = frame->dlc;
+	memcpy(tx.data8, frame->data, 8);
+
 	// 1 second timeout
-	int result = hal_can_transmit((hal_can_driver_t)device, CAN_ANY_MAILBOX, &txmsg, 1000);
+	int result = hal_can_transmit((hal_can_driver_t)device, CAN_ANY_MAILBOX, &tx, 1000);
 	if (result == 0) {
 		canWriteOk++;
 	} else {
 		canWriteNotOk++;
 	}
+
+	return result;
 }
 
-/**
- * send CAN message from txmsg buffer, using default packet size
- */
-void sendCanMessage() {
-	sendCanMessage2(8);
-}
+static void can_register_rx_handlers(void) {
+	/*
+	 * Keep behavior unchanged: we previously logged every received frame and then
+	 * called obdOnCanPacketRx (which internally filtered by SID).
+	 *
+	 * Register both as match-all handlers.
+	 */
+	rusefi_can_rx_registration_t reg;
 
-static void canDashboardBMW(void) {
-	//BMW Dashboard
-	commonTxInit(CAN_BMW_E46_SPEED);
-	setShortValue(&txmsg, 10 * 8, 1);
-	sendCanMessage();
+	memset(&reg, 0, sizeof(reg));
+	reg.id_filter = 0;
+	reg.id_mask = 0; /* match-all */
+	reg.required_flags = 0;
+	reg.handler = can_log_rx_handler;
+	reg.user_ctx = NULL;
+	(void)rusefi_can_core_register_rx_handler(&s_can_core, &reg);
 
-	commonTxInit(CAN_BMW_E46_RPM);
-	setShortValue(&txmsg, (int) (GET_RPM() * 6.4), 2);
-	sendCanMessage();
-
-	commonTxInit(CAN_BMW_E46_DME2);
-	setShortValue(&txmsg, (int) ((engine->sensors.clt + 48.373) / 0.75), 1);
-	sendCanMessage();
-}
-
-static void canMazdaRX8(void) {
-	commonTxInit(CAN_MAZDA_RX_STEERING_WARNING);
-	// todo: something needs to be set here? see http://rusefi.com/wiki/index.php?title=Vehicle:Mazda_Rx8_2004
-	sendCanMessage();
-
-	commonTxInit(CAN_MAZDA_RX_RPM_SPEED);
-
-	float kph = getVehicleSpeed();
-
-	setShortValue(&txmsg, SWAP_UINT16(GET_RPM() * 4), 0);
-	setShortValue(&txmsg, 0xFFFF, 2);
-	setShortValue(&txmsg, SWAP_UINT16((int )(100 * kph + 10000)), 4);
-	setShortValue(&txmsg, 0, 6);
-	sendCanMessage();
-
-	commonTxInit(CAN_MAZDA_RX_STATUS_1);
-	txmsg.data8[0] = 0xFE; //Unknown
-	txmsg.data8[1] = 0xFE; //Unknown
-	txmsg.data8[2] = 0xFE; //Unknown
-	txmsg.data8[3] = 0x34; //DSC OFF in combo with byte 5 Live data only seen 0x34
-	txmsg.data8[4] = 0x00; // B01000000; // Brake warning B00001000;  //ABS warning
-	txmsg.data8[5] = 0x40; // TCS in combo with byte 3
-	txmsg.data8[6] = 0x00; // Unknown
-	txmsg.data8[7] = 0x00; // Unused
-	sendCanMessage();
-
-	commonTxInit(CAN_MAZDA_RX_STATUS_2);
-	txmsg.data8[0] = (uint8_t)(engine->sensors.clt + 69); //temp gauge //~170 is red, ~165 last bar, 152 centre, 90 first bar, 92 second bar
-	txmsg.data8[1] = ((int16_t)(engine->engineState.vssEventCounter*(engineConfiguration->vehicleSpeedCoef*0.277*2.58))) & 0xff;
-	txmsg.data8[2] = 0x00; // unknown
-	txmsg.data8[3] = 0x00; //unknown
-	txmsg.data8[4] = 0x01; //Oil Pressure (not really a gauge)
-	txmsg.data8[5] = 0x00; //check engine light
-	txmsg.data8[6] = 0x00; //Coolant, oil and battery
-	if ((GET_RPM()>0) && (engine->sensors.vBatt<13)) {
-		setTxBit(6, 6); // battery light
-	}
-	if (engine->sensors.clt > 105) {
-		setTxBit(6, 1); // coolant light, 101 - red zone, light means its get too hot
-	}
-	//oil pressure warning lamp bit is 7
-	txmsg.data8[7] = 0x00; //unused
-	sendCanMessage();
-}
-
-static void canDashboardFiat(void) {
-	//Fiat Dashboard
-	commonTxInit(CAN_FIAT_MOTOR_INFO);
-	setShortValue(&txmsg, (int) (engine->sensors.clt - 40), 3); //Coolant Temp
-	setShortValue(&txmsg, GET_RPM() / 32, 6); //RPM
-	sendCanMessage();
-}
-
-static void canDashboardVAG(void) {
-	//VAG Dashboard
-	commonTxInit(CAN_VAG_RPM);
-	setShortValue(&txmsg, GET_RPM() * 4, 2); //RPM
-	sendCanMessage();
-
-	commonTxInit(CAN_VAG_CLT);
-	setShortValue(&txmsg, (int) ((engine->sensors.clt + 48.373) / 0.75), 1); //Coolant Temp
-	sendCanMessage();
-}
-
-static void canInfoNBCBroadcast(can_nbc_e typeOfNBC) {
-	switch (typeOfNBC) {
-	case CAN_BUS_NBC_BMW:
-		canDashboardBMW();
-		break;
-	case CAN_BUS_NBC_FIAT:
-		canDashboardFiat();
-		break;
-	case CAN_BUS_NBC_VAG:
-		canDashboardVAG();
-		break;
-	case CAN_BUS_MAZDA_RX8:
-		canMazdaRX8();
-		break;
-	default:
-		break;
-	}
+	memset(&reg, 0, sizeof(reg));
+	reg.id_filter = 0;
+	reg.id_mask = 0; /* match-all */
+	reg.required_flags = 0;
+	reg.handler = can_obd2_rx_handler;
+	reg.user_ctx = NULL;
+	(void)rusefi_can_core_register_rx_handler(&s_can_core, &reg);
 }
 
 static void canRead(void) {
-	CANDriver *device = detectCanDevice(CONFIGB(canRxPin),
-			CONFIGB(canTxPin));
+	CANDriver* device = detectCanDevice(CONFIGB(canRxPin), CONFIGB(canTxPin));
 	if (device == NULL) {
 		warning(CUSTOM_ERR_CAN_CONFIGURATION, "CAN configuration issue");
 		return;
 	}
-//	scheduleMsg(&logger, "Waiting for CAN");
+
 	int result = hal_can_receive((hal_can_driver_t)device, CAN_ANY_MAILBOX, &rxBuffer, 1000);
 	if (result != 0) {
 		return;
 	}
 
 	canReadCounter++;
-	printPacket(&rxBuffer);
-	obdOnCanPacketRx(&rxBuffer);
+
+	rusefi_can_frame_t frame;
+	memset(&frame, 0, sizeof(frame));
+
+	frame.id = rx_id_from_chibios(&rxBuffer);
+	frame.flags = rx_flags_from_chibios(&rxBuffer);
+	frame.dlc = rxBuffer.DLC;
+	memcpy(frame.data, rxBuffer.data8, 8);
+
+	(void)rusefi_can_core_dispatch_rx(&s_can_core, &frame);
 }
 
 static void writeStateToCan(void) {
 	canInfoNBCBroadcast(engineConfiguration->canNbcType);
 }
 
-static msg_t canThread(void *arg) {
+static msg_t canThread(void* arg) {
 	(void)arg;
 	chRegSetThreadName("CAN");
-	while (true) {
-		if (engineConfiguration->canWriteEnabled)
-			writeStateToCan();
 
-		if (engineConfiguration->canReadEnabled)
-			canRead(); // todo: since this is a blocking operation, do we need a separate thread for 'write'?
+	while (true) {
+		if (engineConfiguration->canWriteEnabled) {
+			writeStateToCan();
+		}
+
+		if (engineConfiguration->canReadEnabled) {
+			canRead(); // blocking receive, unchanged
+		}
 
 		if (engineConfiguration->canSleepPeriod < 10) {
 			warning(CUSTOM_OBD_LOW_CAN_PERIOD, "%d too low CAN", engineConfiguration->canSleepPeriod);
@@ -266,6 +272,7 @@ static msg_t canThread(void *arg) {
 
 		chThdSleepMilliseconds(engineConfiguration->canSleepPeriod);
 	}
+
 #if defined __GNUC__ || defined(__DOXYGEN__)
 	return -1;
 #endif
@@ -280,7 +287,8 @@ static void canInfo(void) {
 	scheduleMsg(&logger, "CAN TX %s", hwPortname(CONFIGB(canTxPin)));
 	scheduleMsg(&logger, "CAN RX %s", hwPortname(CONFIGB(canRxPin)));
 	scheduleMsg(&logger, "type=%d canReadEnabled=%s canWriteEnabled=%s period=%d", engineConfiguration->canNbcType,
-			boolToString(engineConfiguration->canReadEnabled), boolToString(engineConfiguration->canWriteEnabled),
+			boolToString(engineConfiguration->canReadEnabled),
+			boolToString(engineConfiguration->canWriteEnabled),
 			engineConfiguration->canSleepPeriod);
 
 	scheduleMsg(&logger, "CAN rx_cnt=%d/tx_ok=%d/tx_not_ok=%d", canReadCounter, canWriteOk, canWriteNotOk);
@@ -291,7 +299,7 @@ void setCanType(int type) {
 	canInfo();
 }
 
-void postCanState(TunerStudioOutputChannels *tsOutputChannels) {
+void postCanState(TunerStudioOutputChannels* tsOutputChannels) {
 	tsOutputChannels->debugIntField1 = isCanEnabled ? canReadCounter : -1;
 	tsOutputChannels->debugIntField2 = isCanEnabled ? canWriteOk : -1;
 	tsOutputChannels->debugIntField3 = isCanEnabled ? canWriteNotOk : -1;
@@ -316,15 +324,18 @@ void startCanPins(DECLARE_ENGINE_PARAMETER_SIGNATURE) {
 void initCan(void) {
 	isCanEnabled = (CONFIGB(canTxPin) != GPIO_UNASSIGNED) && (CONFIGB(canRxPin) != GPIO_UNASSIGNED);
 	if (isCanEnabled) {
-		if (!isValidCanTxPin(CONFIGB(canTxPin)))
+		if (!isValidCanTxPin(CONFIGB(canTxPin))) {
 			firmwareError(CUSTOM_OBD_70, "invalid CAN TX %s", hwPortname(CONFIGB(canTxPin)));
-		if (!isValidCanRxPin(CONFIGB(canRxPin)))
+		}
+		if (!isValidCanRxPin(CONFIGB(canRxPin))) {
 			firmwareError(CUSTOM_OBD_70, "invalid CAN RX %s", hwPortname(CONFIGB(canRxPin)));
+		}
 	}
 
 	addConsoleAction("caninfo", canInfo);
-	if (!isCanEnabled)
+	if (!isCanEnabled) {
 		return;
+	}
 
 #if STM32_CAN_USE_CAN2 || defined(__DOXYGEN__)
 	// CAN1 is required for CAN2
@@ -334,10 +345,19 @@ void initCan(void) {
 	hal_can_start(hal_can_get_driver(HAL_CAN_DRIVER_1), &canConfig500);
 #endif /* STM32_CAN_USE_CAN2 */
 
-	chThdCreateStatic(canTreadStack, sizeof(canTreadStack), NORMALPRIO, (tfunc_t)(void*) canThread, NULL);
+	/* Initialize core and wire TX/RX dispatch */
+	rusefi_can_core_init(&s_can_core);
+
+	rusefi_can_tx_iface_t tx_iface;
+	tx_iface.send = can_platform_send;
+	tx_iface.user_ctx = NULL;
+	rusefi_can_core_set_tx_iface(&s_can_core, &tx_iface);
+
+	can_register_rx_handlers();
+
+	chThdCreateStatic(canTreadStack, sizeof(canTreadStack), NORMALPRIO, (tfunc_t)(void*)canThread, NULL);
 
 	startCanPins();
-
 }
 
 #endif /* EFI_CAN_SUPPORT */
